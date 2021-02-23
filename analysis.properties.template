@@ -13,8 +13,10 @@ frontend-url=https://localhost
 
 # S3 buckets where Analysis inputs and results are stored.
 bundle-bucket=analysis-staging-bundles
+polygons-bucket=analysis-staging-polygons
 grid-bucket=analysis-staging-grids
 results-bucket=analysis-staging-results
+taui-results-bucket=analysis-static
 resources-bucket=analysis-staging-resources
 
 # The S3 bucket where we can find tiles of the entire US census, built with Conveyal seamless-census.

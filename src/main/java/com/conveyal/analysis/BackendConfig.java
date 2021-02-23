@@ -58,8 +58,10 @@ public class BackendConfig implements
     private final String seamlessCensusBucket;
     private final String seamlessCensusRegion;
     private final String gridBucket;
+    private final String polygonsBucket;
     public final String resourcesBucket; // This appears to be unused
     public final String resultsBucket;
+    private final String tauiResultsBucket;
     private final int lightThreads;
     private final int heavyThreads;
     private final int maxWorkers;
@@ -112,8 +114,10 @@ public class BackendConfig implements
         seamlessCensusBucket = getProperty("seamless-census-bucket", true);
         seamlessCensusRegion = getProperty("seamless-census-region", true);
         gridBucket = getProperty("grid-bucket", true);
+        polygonsBucket = getProperty("polygons-bucket", true);
         resourcesBucket = getProperty("resources-bucket", true);
         resultsBucket = getProperty("results-bucket", true);
+        tauiResultsBucket = getProperty("taui-results-bucket", true);
         lightThreads = Integer.parseInt(getProperty("light-threads", true));
         heavyThreads = Integer.parseInt(getProperty("heavy-threads", true));
         maxWorkers = Integer.parseInt(getProperty("max-workers", true));
@@ -162,7 +166,9 @@ public class BackendConfig implements
     @Override public int heavyThreads () { return heavyThreads; }
     @Override public String databaseUri () { return databaseUri; }
     @Override public String databaseName () { return databaseName; }
+    @Override public String polygonsBucket () { return polygonsBucket; }
     @Override public String resultsBucket () { return resultsBucket; }
+    @Override public String tauiResultsBucket () { return tauiResultsBucket; }
     @Override public boolean testTaskRedelivery () { return testTaskRedelivery; }
     @Override public String gridBucket () { return gridBucket; }
     @Override public String seamlessCensusRegion () { return seamlessCensusRegion; }
