@@ -1,6 +1,7 @@
 package com.conveyal.file;
 
 public enum FileStorageFormat {
+    CSV("csv", "text/csv"),
     FREEFORM("pointset", "application/octet-stream"),
     GRID("grid", "application/octet-stream"),
     POINTSET("pointset", "application/octet-stream"),
@@ -8,7 +9,7 @@ public enum FileStorageFormat {
     TIFF("tiff", "image/tiff");
 
     // These are not currently used but plan to be in the future. Exact types need to be determined
-    // CSV("csv", "text/csv"),
+
     // GTFS("zip", "application/zip"),
     // PBF("pbf", "application/octet-stream"),
     // SHP("shp", "application/octet-stream") // This type does not work as is, it should be a zip?

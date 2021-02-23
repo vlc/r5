@@ -143,8 +143,14 @@ public class HttpApi implements Component {
                 String filename = req.splat()[0];
                 FileStorageKey key = new FileStorageKey(req.params("bucket"), filename);
                 File file = fileStorage.getFile(key);
-                FileStorageFormat format = FileStorageFormat.fromFilename(filename);
-                res.type(format.mimeType);
+
+                if (filename.endsWith("gz")) {
+                    FileStorageFormat format = FileStorageFormat.fromFilename(filename.substring(0, filename.length() - 3));
+                    res.type(format.mimeType);
+                } else {
+                    FileStorageFormat format = FileStorageFormat.fromFilename(filename);
+                    res.type(format.mimeType);
+                }
 
                 // If the content-encoding is set to gzip, Spark automatically gzips the response. This mangles data
                 // that was already gzipped. Therefore, check if it's gzipped and pipe directly to the raw OutputStream.

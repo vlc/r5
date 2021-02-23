@@ -10,7 +10,6 @@ import com.conveyal.analysis.models.RegionalAnalysis;
 import com.conveyal.analysis.results.MultiOriginAssembler;
 import com.conveyal.analysis.util.JsonUtil;
 import com.conveyal.file.FileStorage;
-import com.conveyal.file.FileStorageKey;
 import com.conveyal.file.FileUtils;
 import com.conveyal.r5.analyst.WorkerCategory;
 import com.conveyal.r5.analyst.cluster.RegionalTask;
@@ -31,9 +30,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.function.BiConsumer;
 
 import static com.conveyal.analysis.components.eventbus.RegionalAnalysisEvent.State.CANCELED;
 import static com.conveyal.analysis.components.eventbus.RegionalAnalysisEvent.State.COMPLETED;
@@ -86,13 +84,17 @@ public class Broker {
         int maxWorkers ();
         String resultsBucket ();
         String bundleBucket ();
+        String polygonsBucket ();
+        String tauiResultsBucket ();
         boolean testTaskRedelivery ();
     }
 
     private Config config;
+    private final boolean offlineMode;
 
     // Component Dependencies
-    private final FileStorage fileStorage;
+    private final BiConsumer<String, File> moveIntoResultsStorage;
+    private final BiConsumer<String, File> moveIntoBundleStorage;
     private final EventBus eventBus;
     private final WorkerLauncher workerLauncher;
 
@@ -129,12 +131,6 @@ public class Broker {
     private WorkerCatalog workerCatalog = new WorkerCatalog();
 
     /**
-     * These objects piece together results received from workers into one regional analysis result
-     * file per job.
-     */
-    private static Map<String, MultiOriginAssembler> resultAssemblers = new HashMap<>();
-
-    /**
      * keep track of which graphs we have launched workers on and how long ago we launched them, so
      * that we don't re-request workers which have been requested.
      */
@@ -142,8 +138,10 @@ public class Broker {
             TCollections.synchronizedMap(new TObjectLongHashMap<>());
 
     public Broker (Config config, FileStorage fileStorage, EventBus eventBus, WorkerLauncher workerLauncher) {
+        moveIntoBundleStorage = fileStorage.createMoveIntoStorage(config.bundleBucket());
+        moveIntoResultsStorage = fileStorage.createMoveIntoStorage(config.resultsBucket());
+        offlineMode = config.offline();
         this.config = config;
-        this.fileStorage = fileStorage;
         this.eventBus = eventBus;
         this.workerLauncher = workerLauncher;
     }
@@ -154,80 +152,60 @@ public class Broker {
      * We pass in the group and user only to tag any newly created workers. This should probably be done in the caller.
      */
     public synchronized void enqueueTasksForRegionalJob (RegionalAnalysis regionalAnalysis) {
-
+        // Store the full scenario in the FileStore
+        storeScenarioJSON(regionalAnalysis.request.scenario, regionalAnalysis.request.graphId);
         // Make a copy of the regional task inside the RegionalAnalysis, replacing the scenario with a scenario ID.
-        RegionalTask templateTask = templateTaskFromRegionalAnalysis(regionalAnalysis);
+        RegionalTask templateTask = regionalAnalysis.request.clone();
+        // First replace the inline scenario with a scenario ID, storing the scenario for retrieval by workers.
+        templateTask.scenarioId = templateTask.scenario.id;
+        // Null out the scenario in the template task, avoiding repeated serialization to the workers as massive JSON.
+        templateTask.scenario = null;
+        // Set the jobId to the unique regional analysis ID.
+        templateTask.jobId = regionalAnalysis._id;
+
+        WorkerTags workerTags = WorkerTags.fromRegionalAnalysis(regionalAnalysis);
 
         LOG.info("Enqueuing tasks for job {} using template task.", templateTask.jobId);
         if (findJob(templateTask.jobId) != null) {
             LOG.error("Someone tried to enqueue job {} but it already exists.", templateTask.jobId);
             throw new RuntimeException("Enqueued duplicate job " + templateTask.jobId);
         }
-        WorkerTags workerTags = WorkerTags.fromRegionalAnalysis(regionalAnalysis);
-        Job job = new Job(templateTask, workerTags);
+
+        MultiOriginAssembler assembler = new MultiOriginAssembler(regionalAnalysis, templateTask, moveIntoResultsStorage);
+        Job job = new Job(templateTask, assembler, workerTags);
         jobs.put(job.workerCategory, job);
-
-        // Register the regional job so results received from multiple workers can be assembled into one file.
-        // TODO encapsulate MultiOriginAssemblers in a new Component
-        MultiOriginAssembler assembler =
-                new MultiOriginAssembler(regionalAnalysis, job, config.resultsBucket(), fileStorage);
-
-        resultAssemblers.put(templateTask.jobId, assembler);
 
         if (config.testTaskRedelivery()) {
             // This is a fake job for testing, don't confuse the worker startup code below with null graph ID.
             return;
         }
 
-        if (workerCatalog.noWorkersAvailable(job.workerCategory, config.offline())) {
+        if (offlineMode && workerCatalog.noWorkersAvailableForGraph(job.workerCategory.graphId)) {
+            createOnDemandWorkerInCategory(job.workerCategory, workerTags);
+        } else if (!offlineMode && workerCatalog.noWorkersAvailableInCategory(job.workerCategory)) {
             createOnDemandWorkerInCategory(job.workerCategory, workerTags);
         } else {
             // Workers exist in this category, clear out any record that we're waiting for one to start up.
             recentlyRequestedWorkers.remove(job.workerCategory);
         }
+
         eventBus.send(new RegionalAnalysisEvent(templateTask.jobId, STARTED).forUser(workerTags.user, workerTags.group));
     }
 
     /**
-     * The single RegionalTask object represents a lot of individual accessibility tasks at many different origin
-     * points, typically on a grid. Before passing that RegionalTask on to the Broker (which distributes tasks to
-     * workers and tracks progress), we remove the details of the scenario, substituting the scenario's unique ID
-     * to save time and bandwidth. This avoids repeatedly sending the scenario details to the worker in every task,
-     * as they are often quite voluminous. The workers will fetch the scenario once from S3 and cache it based on
-     * its ID only. We protectively clone this task because we're going to null out its scenario field, and don't
-     * want to affect the original object which contains all the scenario details.
-     * TODO Why is all this detail added after the Persistence call?
-     *      We don't want to store all the details added below in Mongo?
+     * TODO should be done in regional analysis controller?
+     * @param scenario
+     * @param bundleId
      */
-    private RegionalTask templateTaskFromRegionalAnalysis (RegionalAnalysis regionalAnalysis) {
-        RegionalTask templateTask = regionalAnalysis.request.clone();
-        // First replace the inline scenario with a scenario ID, storing the scenario for retrieval by workers.
-        Scenario scenario = templateTask.scenario;
-        templateTask.scenarioId = scenario.id;
-        // Null out the scenario in the template task, avoiding repeated serialization to the workers as massive JSON.
-        templateTask.scenario = null;
-        String fileName = String.format("%s_%s.json", regionalAnalysis.bundleId, scenario.id);
-        FileStorageKey fileStorageKey = new FileStorageKey(config.bundleBucket(), fileName);
+    private void storeScenarioJSON (Scenario scenario, String bundleId) {
+        String fileName = String.format("%s_%s.json", bundleId, scenario.id);
         try {
             File localScenario = FileUtils.createScratchFile("json");
             JsonUtil.objectMapper.writeValue(localScenario, scenario);
-            fileStorage.moveIntoStorage(fileStorageKey, localScenario);
+            moveIntoBundleStorage.accept(fileName, localScenario);
         } catch (IOException e) {
             LOG.error("Error storing scenario for retrieval by workers.", e);
         }
-        // Fill in all the fields in the template task that will remain the same across all tasks in a job.
-        // I am not sure why we are re-setting all these fields, it seems like they are already set when the task is
-        // initialized by AnalysisRequest.populateTask. But we'd want to thoroughly check that assumption before
-        // eliminating or moving these lines.
-        templateTask.jobId = regionalAnalysis._id;
-        templateTask.graphId = regionalAnalysis.bundleId;
-        templateTask.workerVersion = regionalAnalysis.workerVersion;
-        templateTask.height = regionalAnalysis.height;
-        templateTask.width = regionalAnalysis.width;
-        templateTask.north = regionalAnalysis.north;
-        templateTask.west = regionalAnalysis.west;
-        templateTask.zoom = regionalAnalysis.zoom;
-        return templateTask;
     }
 
     /**
@@ -243,8 +221,7 @@ public class Broker {
      * @param nSpot EC2 spot instances to request
      */
     public void createWorkersInCategory (WorkerCategory category, WorkerTags workerTags, int nOnDemand, int nSpot) {
-
-        if (config.offline()) {
+        if (offlineMode) {
             LOG.info("Work offline enabled, not creating workers for {}", category);
             return;
         }
@@ -292,14 +269,14 @@ public class Broker {
      */
     public synchronized List<RegionalTask> getSomeWork (WorkerCategory workerCategory) {
         Job job;
-        if (config.offline()) {
+        if (offlineMode) {
             // Working in offline mode; get tasks from the first job that has any tasks to deliver.
             job = jobs.values().stream()
-                    .filter(j -> j.hasTasksToDeliver()).findFirst().orElse(null);
+                    .filter(Job::hasTasksToDeliver).findFirst().orElse(null);
         } else {
             // This worker has a preferred network, get tasks from a job on that network.
             job = jobs.get(workerCategory).stream()
-                    .filter(j -> j.hasTasksToDeliver()).findFirst().orElse(null);
+                    .filter(Job::hasTasksToDeliver).findFirst().orElse(null);
         }
         if (job == null) {
             // No matching job was found.
@@ -335,7 +312,14 @@ public class Broker {
             jobs.remove(job.workerCategory, job);
             // This method is called after the regional work results are handled, finishing and closing the local file.
             // So we can harmlessly remove the MultiOriginAssembler now that the job is removed.
-            resultAssemblers.remove(jobId);
+            try {
+                job.assembler.terminate();
+            } catch (Exception e) {
+                LOG.error(
+                        "Could not terminate grid result assembler, this may waste disk space. Reason: {}",
+                        e.toString()
+                );
+            }
             eventBus.send(new RegionalAnalysisEvent(job.jobId, COMPLETED).forUser(job.workerTags.user, job.workerTags.group));
         }
     }
@@ -372,10 +356,8 @@ public class Broker {
         if (job == null) return false;
         boolean success = jobs.remove(job.workerCategory, job);
         // Shut down the object used for assembling results, removing its associated temporary disk file.
-        // TODO just put the assembler in the Job object
-        MultiOriginAssembler assembler = resultAssemblers.remove(jobId);
         try {
-            assembler.terminate();
+            job.assembler.terminate();
         } catch (Exception e) {
             LOG.error(
                 "Could not terminate grid result assembler, this may waste disk space. Reason: {}",
@@ -393,13 +375,12 @@ public class Broker {
      * and network already loaded. If none exist, return null and try to start one.
      */
     public synchronized String getWorkerAddress(WorkerCategory workerCategory) {
-        if (config.offline()) {
+        if (offlineMode) {
             return "localhost";
         }
         // First try to get a worker that's already loaded the right network.
         // This value will be null if no workers exist in this category - caller should attempt to create some.
-        String workerAddress = workerCatalog.getSinglePointWorkerAddressForCategory(workerCategory);
-        return workerAddress;
+        return workerCatalog.getSinglePointWorkerAddressForCategory(workerCategory);
     }
 
 
@@ -438,17 +419,15 @@ public class Broker {
         // requestExtraWorkers below without synchronization, because that method only uses final
         // fields of the job.
         Job job;
-        MultiOriginAssembler assembler;
         synchronized (this) {
             job = findJob(workResult.jobId);
-            assembler = resultAssemblers.get(workResult.jobId);
         }
-        if (assembler == null) {
+        if (job == null) {
             LOG.error("Received result for unrecognized job ID {}, discarding.", workResult.jobId);
         } else {
             // FIXME this is building up to 5 grids and uploading them to S3, this should not be done synchronously in
             //       an HTTP handler.
-            assembler.handleMessage(workResult);
+            job.assembler.handleMessage(workResult);
             // When results for the task with the magic number are received, consider boosting the job by starting EC2
             // spot instances
             if (workResult.taskId == AUTO_START_SPOT_INSTANCES_AT_TASK) {
@@ -457,7 +436,6 @@ public class Broker {
         }
 
         markTaskCompleted(workResult.jobId, workResult.taskId);
-
     }
 
     private void requestExtraWorkersIfAppropriate(Job job) {
@@ -466,9 +444,9 @@ public class Broker {
         if (categoryWorkersAlreadyRunning < MAX_WORKERS_PER_CATEGORY) {
             // Start a number of workers that scales with the number of total tasks, up to a fixed number.
             // TODO more refined determination of number of workers to start (e.g. using tasks per minute)
-            int targetWorkerTotal = Math.min(MAX_WORKERS_PER_CATEGORY, job.nTasksTotal / TARGET_TASKS_PER_WORKER);
+            int targetWorkerTotal = Math.min(MAX_WORKERS_PER_CATEGORY, job.templateTask.nTasksTotal / TARGET_TASKS_PER_WORKER);
             // Guardrail until freeform pointsets are tested more thoroughly
-            if (job.originPointSet != null) targetWorkerTotal = Math.min(targetWorkerTotal, 5);
+            if (job.templateTask.originPointSet != null) targetWorkerTotal = Math.min(targetWorkerTotal, 5);
             int nSpot =  targetWorkerTotal - categoryWorkersAlreadyRunning;
             createWorkersInCategory(job.workerCategory, job.workerTags, 0, nSpot);
         }
@@ -478,21 +456,13 @@ public class Broker {
      * Returns a simple status object intended to inform the UI of job progress.
      */
     public RegionalAnalysisStatus getJobStatus (String jobId) {
-        MultiOriginAssembler resultAssembler = resultAssemblers.get(jobId);
-        if (resultAssembler == null) {
-            return null;
-        } else {
-            return new RegionalAnalysisStatus(resultAssembler);
-        }
+        Job job = findJob(jobId);
+        return job == null ? null : new RegionalAnalysisStatus(job.assembler);
     }
 
     public File getPartialRegionalAnalysisResults (String jobId) {
-        MultiOriginAssembler resultAssembler = resultAssemblers.get(jobId);
-        if (resultAssembler == null) {
-            return null;
-        } else {
-            return resultAssembler.getGridBufferFile();
-        }
+        Job job = findJob(jobId);
+        return job == null ? null : job.assembler.getGridBufferFile();
     }
 
     public synchronized boolean anyJobsActive () {
@@ -507,5 +477,4 @@ public class Broker {
             LOG.info(job.toString());
         }
     }
-
 }

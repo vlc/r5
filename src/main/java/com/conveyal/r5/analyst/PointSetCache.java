@@ -1,8 +1,6 @@
 package com.conveyal.r5.analyst;
 
-import com.conveyal.file.FileStorage;
 import com.conveyal.file.FileStorageFormat;
-import com.conveyal.file.FileStorageKey;
 import com.conveyal.file.FileUtils;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
@@ -14,6 +12,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Function;
 import java.util.zip.GZIPInputStream;
 
 /**
@@ -27,8 +26,7 @@ public class PointSetCache {
     /** How large the cache should be. Should be large enough to fit all field of a project */
     private static final int CACHE_SIZE = 200;
 
-    private final FileStorage fileStore;
-    private final String bucket;
+    private final Function<String, File> getFile;
 
     private LoadingCache<String, PointSet> cache = CacheBuilder.newBuilder()
                 .maximumSize(CACHE_SIZE)
@@ -40,13 +38,12 @@ public class PointSetCache {
                     }
                 });
 
-    public PointSetCache(FileStorage fileStore, String bucket) {
-        this.bucket = bucket;
-        this.fileStore = fileStore;
+    public PointSetCache(Function<String, File> getFile) {
+        this.getFile = getFile;
     }
 
     private PointSet loadPointSet(String key) throws IOException {
-        File file = fileStore.getFile(new FileStorageKey(bucket, key));
+        File file = getFile.apply(key);
         // If the object does not exist on S3, getObject will throw an exception which will be caught in the
         // PointSetCache.get method. Grids are gzipped on S3.
         InputStream is = new GZIPInputStream(FileUtils.getInputStream(file));
@@ -67,24 +64,4 @@ public class PointSetCache {
             throw new RuntimeException(e);
         }
     }
-
-    // FIXME total hack to make freeform pointset loading available statically on the backend for use within constructors.
-    //      We should definitely refactor things so this is not necessary to hit network services inside constructors.
-    //      Maybe fill in the freeform pointset on a transient field in request the way we do with the destination Grid.
-    //      RegionalTask.originPointSetKey can produce transient RegionalTalk.originPointSet.
-    private static PointSetCache instance;
-
-    public static void initializeStatically (FileStorage fileStorage, String gridBucket) {
-        instance = new PointSetCache(fileStorage, gridBucket);
-    }
-
-    public static FreeFormPointSet readFreeFormFromFileStore (String key) {
-        try {
-            return (FreeFormPointSet) instance.loadPointSet(key);
-        } catch (IOException e) {
-            throw new RuntimeException("Error reading freeform pointset: " + e);
-        }
-
-    }
-
 }

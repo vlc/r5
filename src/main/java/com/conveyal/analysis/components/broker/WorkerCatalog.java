@@ -160,13 +160,15 @@ public class WorkerCatalog {
         return observationsByWorkerId.values();
     }
 
-    public synchronized boolean noWorkersAvailable(WorkerCategory category, boolean ignoreWorkerVersion) {
+    public synchronized boolean noWorkersAvailableInCategory(WorkerCategory category) {
         purgeDeadWorkers();
-        if (ignoreWorkerVersion) {
-            // Look for workers on the right network ID, independent of their worker software version.
-            return observationsByWorkerId.values().stream().noneMatch(obs -> obs.category.graphId.equals(category.graphId));
-        }
         return workerIdsByCategory.get(category).isEmpty();
+    }
+
+    // Look for workers on the right network ID, independent of their worker software version.
+    public synchronized boolean noWorkersAvailableForGraph(String graphId) {
+        purgeDeadWorkers();
+        return observationsByWorkerId.values().stream().noneMatch(obs -> obs.category.graphId.equals(graphId));
     }
 
 }

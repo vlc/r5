@@ -1,7 +1,6 @@
 package com.conveyal.analysis.models;
 
 import com.conveyal.analysis.AnalysisServerException;
-import com.conveyal.analysis.results.CsvResultWriter;
 import com.conveyal.r5.analyst.cluster.RegionalTask;
 import org.locationtech.jts.geom.Geometry;
 
@@ -76,11 +75,20 @@ public class RegionalAnalysis extends Model implements Cloneable {
     /** Has this analysis been (soft) deleted? */
     public boolean deleted;
 
-    public Map<CsvResultWriter.Result, String> resultStorage = new HashMap<>();
+    public Map<Result, String> resultStorage = new HashMap<>();
 
-    public void addCsvStoragePath (CsvResultWriter.Result resultType, String outputBucket) {
-        // TODO less fragile path, consistent gzip behavior
-        resultStorage.put(resultType, outputBucket + "/" + this._id + "_" + resultType + ".csv.gz");
+    public enum Result {
+        ACCESS,
+        TIMES,
+        PATHS
+    }
+
+    public String getCsvStoragePath (Result resultType) {
+        return String.format(this._id, "_", resultType.toString(), ".csv");
+    }
+
+    public void addCsvStoragePath (Result resultType) {
+        resultStorage.put(resultType, this.getCsvStoragePath(resultType));
     }
 
     public RegionalAnalysis clone () {

@@ -6,7 +6,6 @@ import com.conveyal.analysis.models.RegionalAnalysis;
  * Describes the status of a Job in a REST API response.
  */
 public class JobStatus {
-
     /** The ID of this job. */
     public String jobId;
 
@@ -45,7 +44,7 @@ public class JobStatus {
         this.jobId = job.jobId;
         this.graphId = job.workerCategory.graphId;
         this.workerCommit = job.workerCategory.workerVersion;
-        this.total = job.nTasksTotal;
+        this.total = job.templateTask.nTasksTotal;
         this.complete = job.nTasksCompleted;
         this.incomplete = total - complete;
         this.deliveries = job.nTasksDelivered;

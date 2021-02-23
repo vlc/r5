@@ -1,8 +1,6 @@
 package com.conveyal.analysis.components.broker;
 
-import com.conveyal.r5.analyst.FreeFormPointSet;
-import com.conveyal.r5.analyst.Grid;
-import com.conveyal.r5.analyst.PointSetCache;
+import com.conveyal.analysis.results.MultiOriginAssembler;
 import com.conveyal.r5.analyst.WorkerCategory;
 import com.conveyal.r5.analyst.cluster.RegionalTask;
 import org.slf4j.Logger;
@@ -22,7 +20,6 @@ public class Job {
 
     // TODO Reimplement re-delivery.
     //      Jobs can get stuck with a few undelivered tasks if something happens to a worker.
-
     public static final int REDELIVERY_WAIT_SEC = 2 * 60;
 
     public static final int MAX_DELIVERY_PASSES = 5;
@@ -37,16 +34,13 @@ public class Job {
     // On the other hand, working on tasks from the same geographic area might be more efficient because
     // they probably use all the same transit lines and roads, which will already be in cache.
     // So let's just keep track of where we're at in the sequence.
-    private int nextTaskToDeliver;
+    private int nextTaskToDeliver = 0;
 
     /** A unique identifier for this job, we use random UUIDs. */
     public final String jobId;
 
     /** Tags to be added to the worker instance to assist in usage analysis and cost breakdowns. */
     public final WorkerTags workerTags;
-
-    /** This can be derived from other fields but is provided as a convenience. */
-    public final int nTasksTotal;
 
     /**
      * Each task will be checked off when it a result is returned by the worker.
@@ -58,7 +52,7 @@ public class Job {
      * The number of remaining tasks can be derived from the deliveredTasks BitSet, but as an
      * optimization we keep a separate counter to avoid constantly scanning over that whole bitset.
      */
-    protected int nTasksCompleted;
+    protected int nTasksCompleted = 0;
 
     /**
      * The total number of task deliveries that have occurred. A task may be counted more than
@@ -69,43 +63,8 @@ public class Job {
     /** Every task in this job will be based on this template task, but have its origin coordinates changed. */
     public final RegionalTask templateTask;
 
-    /**
-     * If non-null, this specifies the non-gridded (freeform) origin points of this regional
-     * analysis. If null, the origin points are specified implicitly by web mercator dimensions of
-     * the template task. Ideally we'd always have a PointSet here and use polymorphism to get the
-     * lat and lon coordinates of each point, whether it's a grid or freeform.
-     * FIXME really we should not have the destinationPointSet in the RegionalTask, but originPointSet here.
-     */
-    public final FreeFormPointSet originPointSet;
-
-    /**
-     * The only thing that changes from one task to the next is the origin coordinates. If this job
-     * does not include an originPointSet, derive these coordinates from the web mercator grid
-     * specified by the template task. If this job does include an originPointSet, look up the
-     * coordinates from that pointset.
-     * <p>
-     * TODO make the workers calculate the coordinates, sending them a range of task numbers.
-     *
-     * @param taskNumber the task number within the job, equal to the point number within the origin
-     *                   point set.
-     */
-    private RegionalTask makeOneTask (int taskNumber) {
-        RegionalTask task = templateTask.clone();
-        task.taskId = taskNumber;
-        if (originPointSet == null) {
-            // Origins specified implicitly by web mercator dimensions of task
-            int x = taskNumber % templateTask.width;
-            int y = taskNumber / templateTask.width;
-            task.fromLat = Grid.pixelToCenterLat(task.north + y, task.zoom);
-            task.fromLon = Grid.pixelToCenterLon(task.west + x, task.zoom);
-        } else {
-            // Look up coordinates and originId from job's originPointSet
-            task.originId = originPointSet.getId(taskNumber);
-            task.fromLat = originPointSet.getLat(taskNumber);
-            task.fromLon = originPointSet.getLon(taskNumber);
-        }
-        return task;
-    }
+    /** Assembler for the results **/
+    public final MultiOriginAssembler assembler;
 
     /**
      * The graph and r5 commit on which tasks are to be run. All tasks contained in a job must
@@ -127,33 +86,19 @@ public class Job {
      */
     public int deliveryPass = 0;
 
-    public Job (RegionalTask templateTask, WorkerTags workerTags) {
+    public Job (RegionalTask templateTask, MultiOriginAssembler assembler, WorkerTags workerTags) {
+        this.assembler = assembler;
         this.jobId = templateTask.jobId;
         this.templateTask = templateTask;
         this.workerCategory = new WorkerCategory(templateTask.graphId, templateTask.workerVersion);
-        this.nTasksCompleted = 0;
-        this.nextTaskToDeliver = 0;
-
-        if (templateTask.originPointSetKey != null) {
-            // If an originPointSetKey is specified, get it from S3 and set the number of origins
-            // FIXME we really shouldn't call network services in a constructor, especially when used in a synchronized
-            //       method on the Broker. However this is only triggered by experimental FreeFormPointSet code.
-            originPointSet = PointSetCache.readFreeFormFromFileStore(templateTask.originPointSetKey);
-            this.nTasksTotal = originPointSet.featureCount();
-        } else {
-            originPointSet = null;
-            this.nTasksTotal = templateTask.width * templateTask.height;
-        }
-
-        this.completedTasks = new BitSet(nTasksTotal);
+        this.completedTasks = new BitSet(templateTask.nTasksTotal);
         this.workerTags = workerTags;
-
     }
 
     public boolean markTaskCompleted(int taskId) {
         // Don't allow negative or huge task numbers to avoid exceptions or expanding the bitset to
         // a huge size.
-        if (taskId < 0 || taskId > nTasksTotal) {
+        if (taskId < 0 || taskId > templateTask.nTasksTotal) {
             return false;
         }
         if (completedTasks.get(taskId)) {
@@ -166,7 +111,7 @@ public class Job {
     }
 
     public boolean isComplete() {
-        return nTasksCompleted == nTasksTotal;
+        return nTasksCompleted == templateTask.nTasksTotal;
     }
 
     /**
@@ -177,9 +122,9 @@ public class Job {
     public List<RegionalTask> generateSomeTasksToDeliver (int maxTasks) {
         List<RegionalTask> tasks = new ArrayList<>(maxTasks);
         // TODO use special bitset iteration syntax.
-        while (nextTaskToDeliver < nTasksTotal && tasks.size() < maxTasks) {
+        while (nextTaskToDeliver < templateTask.nTasksTotal && tasks.size() < maxTasks) {
             if (!completedTasks.get(nextTaskToDeliver)) {
-                tasks.add(makeOneTask(nextTaskToDeliver));
+                tasks.add(templateTask.makeOneTask(nextTaskToDeliver));
             }
             nextTaskToDeliver += 1;
         }
@@ -194,7 +139,7 @@ public class Job {
         if (this.isComplete()) {
             return false;
         }
-        if (nextTaskToDeliver < nTasksTotal) {
+        if (nextTaskToDeliver < templateTask.nTasksTotal) {
             return true;
         }
         // Check whether we should start redelivering tasks - this will be triggered by workers polling.
@@ -207,7 +152,7 @@ public class Job {
             nextTaskToDeliver = 0;
             deliveryPass += 1;
             LOG.warn("Delivered all tasks for job {}, but {} seconds later {} results have not been received. Starting redelivery pass {}.",
-                    jobId, REDELIVERY_WAIT_SEC, nTasksTotal - nTasksCompleted, deliveryPass);
+                    jobId, REDELIVERY_WAIT_SEC, templateTask.nTasksTotal - nTasksCompleted, deliveryPass);
             return true;
         }
         return false;
@@ -218,7 +163,7 @@ public class Job {
      * many bits are set.
      */
     public void verifyComplete() {
-        if (this.isComplete() && completedTasks.cardinality() != nTasksTotal) {
+        if (this.isComplete() && completedTasks.cardinality() != templateTask.nTasksTotal) {
             LOG.error("Something is amiss in completed task tracking.");
         }
     }
@@ -227,7 +172,7 @@ public class Job {
     public String toString() {
         return "Job{" +
                 "jobId='" + jobId + '\'' +
-                ", nTasksTotal=" + nTasksTotal +
+                ", nTasksTotal=" + templateTask.nTasksTotal +
                 ", nTasksCompleted=" + nTasksCompleted +
                 ", deliveryPass=" + deliveryPass +
                 '}';

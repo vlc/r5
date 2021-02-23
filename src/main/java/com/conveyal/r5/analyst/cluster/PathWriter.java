@@ -1,7 +1,7 @@
 package com.conveyal.r5.analyst.cluster;
 
+import com.conveyal.file.FileUtils;
 import com.conveyal.r5.analyst.PersistenceBuffer;
-import com.conveyal.r5.analyst.StreetTimesAndModes;
 import com.conveyal.r5.profile.Path;
 import com.conveyal.r5.profile.StreetMode;
 import gnu.trove.iterator.TIntIterator;
@@ -13,11 +13,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.DataOutput;
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 /**
  * Accumulates information about paths from a given origin to all destinations in a grid, then writes them out for
@@ -64,8 +66,14 @@ public class PathWriter {
      */
     private final TIntList pathIndexes = new TIntArrayList();
 
+    /**
+     * Method for storing the results that comes from an implementation of FileStorage.
+     */
+    private final BiConsumer<String, File> moveIntoTauiStorage;
+
     /** Constructor. Holds onto the task object, which is used to create unique names for the results files. */
-    public PathWriter (AnalysisWorkerTask task) {
+    public PathWriter (AnalysisWorkerTask task, BiConsumer<String, File> moveIntoTauiStorage) {
+        this.moveIntoTauiStorage = moveIntoTauiStorage;
         this.task = task;
         this.nTargets = task.width * task.height;
         indexForPath = new TObjectIntHashMap<>(nTargets / 2, 0.5f, NO_PATH);
@@ -169,9 +177,8 @@ public class PathWriter {
             throw new RuntimeException("IO exception while writing path grid.", e);
         }
         persistenceBuffer.doneWriting();
-        String pathFileName = task.taskId + "_paths.dat";
-        AnalysisWorker.filePersistence.saveStaticSiteData(task, pathFileName, persistenceBuffer);
+        String key = task.taskId + "/" + task.taskId + "_paths.dat";
+        moveIntoTauiStorage.accept(key, FileUtils.createScratchFile(persistenceBuffer.getInputStream()));
     }
-
 }
 

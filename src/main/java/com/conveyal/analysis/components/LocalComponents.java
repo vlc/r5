@@ -16,9 +16,13 @@ import com.conveyal.analysis.controllers.ProjectController;
 import com.conveyal.analysis.controllers.RegionalAnalysisController;
 import com.conveyal.analysis.controllers.TimetableController;
 import com.conveyal.analysis.persistence.AnalysisDB;
+import com.conveyal.file.Bucket;
 import com.conveyal.file.LocalFileStorage;
 import com.conveyal.gtfs.GTFSCache;
+import com.conveyal.r5.analyst.PointSetCache;
+import com.conveyal.r5.analyst.cluster.AnalysisWorker;
 import com.conveyal.r5.streets.OSMCache;
+import com.conveyal.r5.transit.TransportNetworkCache;
 
 import java.util.Arrays;
 import java.util.List;
@@ -35,13 +39,22 @@ public class LocalComponents extends Components {
                 config.localCacheDirectory(),
                 String.format("http://localhost:%s/files", config.serverPort())
         );
-        gtfsCache = new GTFSCache(fileStorage, config);
-        osmCache = new OSMCache(fileStorage, config);
+        bundleBucket = new Bucket(config.bundleBucket(), fileStorage);
+        gridBucket = new Bucket(config.gridBucket(), fileStorage);
+        polygonsBucket = new Bucket(config.polygonsBucket(), fileStorage);
+        resultsBucket = new Bucket(config.resultsBucket(), fileStorage);
+        tauiResultsBucket = new Bucket(config.tauiResultsBucket(), fileStorage);
+        gtfsCache = new GTFSCache(bundleBucket);
+        osmCache = new OSMCache(bundleBucket.createGetFile());
+        pointSetCache = new PointSetCache(gridBucket.createGetFile());
+        transportNetworkCache = new TransportNetworkCache(bundleBucket, gtfsCache, osmCache);
         // New (October 2019) DB layer, this should progressively replace the Persistence class
         database = new AnalysisDB(config);
         eventBus = new EventBus(taskScheduler);
         authentication = new LocalAuthentication();
-        workerLauncher = new LocalWorkerLauncher(config, fileStorage, gtfsCache, osmCache);
+        // TODO share this Bucket/method with the Modifications that use it in a better fashion.
+        AnalysisWorker.getPolygonFile = polygonsBucket.createGetFile();
+        workerLauncher = new LocalWorkerLauncher(config, pointSetCache, transportNetworkCache, tauiResultsBucket.createMoveIntoStorage());
         broker = new Broker(config, fileStorage, eventBus, workerLauncher);
         // Instantiate the HttpControllers last, when all the components except the HttpApi are already created.
         httpApi = new HttpApi(fileStorage, authentication, eventBus, config, standardHttpControllers(this));
@@ -66,8 +79,8 @@ public class LocalComponents extends Components {
                 new GTFSGraphQLController(components.gtfsCache),
                 new BundleController(components),
                 new OpportunityDatasetController(components.fileStorage, components.taskScheduler, components.config),
-                new RegionalAnalysisController(components.broker, components.fileStorage, components.config),
-                new AggregationAreaController(components.fileStorage, components.config),
+                new RegionalAnalysisController(components.broker, components.resultsBucket, components.pointSetCache),
+                new AggregationAreaController(components.gridBucket),
                 new TimetableController(),
                 new FileStorageController(components.fileStorage, components.database),
                 // This broker controller registers at least one handler at URL paths beginning with /internal, which

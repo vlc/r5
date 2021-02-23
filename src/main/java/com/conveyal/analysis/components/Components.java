@@ -4,9 +4,12 @@ import com.conveyal.analysis.BackendConfig;
 import com.conveyal.analysis.components.broker.Broker;
 import com.conveyal.analysis.components.eventbus.EventBus;
 import com.conveyal.analysis.persistence.AnalysisDB;
+import com.conveyal.file.Bucket;
 import com.conveyal.file.FileStorage;
 import com.conveyal.gtfs.GTFSCache;
+import com.conveyal.r5.analyst.PointSetCache;
 import com.conveyal.r5.streets.OSMCache;
+import com.conveyal.r5.transit.TransportNetworkCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,8 +47,15 @@ public abstract class Components {
     /** Verification of user identity and permissions. */
     public Authentication authentication;
     public FileStorage fileStorage;
+    public Bucket bundleBucket;
+    public Bucket gridBucket;
+    public Bucket polygonsBucket;
+    public Bucket resultsBucket;
+    public Bucket tauiResultsBucket;
     public GTFSCache gtfsCache;
     public OSMCache osmCache;
+    public PointSetCache pointSetCache;
+    public TransportNetworkCache transportNetworkCache;
     /** System for processing incoming accessibility analysis requests. */
     public Compute compute = null;
     public WorkerLauncher workerLauncher;

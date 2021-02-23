@@ -2,19 +2,18 @@ package com.conveyal.r5.analyst.cluster;
 
 import com.amazonaws.regions.Regions;
 import com.conveyal.analysis.BackendVersion;
+import com.conveyal.file.Bucket;
 import com.conveyal.file.FileStorage;
+import com.conveyal.file.FileUtils;
 import com.conveyal.file.LocalFileStorage;
 import com.conveyal.file.S3FileStorage;
 import com.conveyal.gtfs.GTFSCache;
 import com.conveyal.r5.OneOriginResult;
 import com.conveyal.r5.analyst.AccessibilityResult;
-import com.conveyal.r5.analyst.FilePersistence;
 import com.conveyal.r5.analyst.NetworkPreloader;
 import com.conveyal.r5.analyst.PersistenceBuffer;
 import com.conveyal.r5.analyst.PointSetCache;
-import com.conveyal.r5.analyst.S3FilePersistence;
 import com.conveyal.r5.analyst.TravelTimeComputer;
-import com.conveyal.r5.analyst.error.ScenarioApplicationException;
 import com.conveyal.r5.analyst.error.TaskError;
 import com.conveyal.r5.common.JsonUtilities;
 import com.conveyal.r5.streets.OSMCache;
@@ -56,6 +55,8 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 import static com.conveyal.r5.analyst.cluster.TravelTimeSurfaceTask.Format.GEOTIFF;
@@ -105,9 +106,15 @@ public class AnalysisWorker implements Runnable {
     /** The port on which the worker will listen for single point tasks forwarded from the backend. */
     public static final int WORKER_LISTEN_PORT = 7080;
 
-    // TODO make non-static and make implementations swappable
-    // This is very ugly because it's static but initialized at class instantiation.
-    public static FilePersistence filePersistence;
+    /**
+     * Static helper for retrieving polygons for congestion / pickup delay modifications.
+     */
+    public static Function<String, File> getPolygonFile;
+
+    /**
+     * Lambda for storing Taui results.
+     */
+    private final BiConsumer<String, File> moveIntoTauiStorage;
 
     /** Keeps some TransportNetworks around, lazy-loading or lazy-building them. */
     public final NetworkPreloader networkPreloader;
@@ -221,41 +228,16 @@ public class AnalysisWorker implements Runnable {
     /** The HTTP server that receives single-point requests. */
     private spark.Service sparkHttpService;
 
-    public static AnalysisWorker forConfig (Properties config) {
-        // FIXME why is there a separate configuration parsing section here? Why not always make the cache based on the configuration?
-        // FIXME why is some configuration done here and some in the constructor?
-        boolean workOffline = Boolean.parseBoolean(config.getProperty("work-offline", "false"));
-        String graphDirectory = config.getProperty("cache-dir", "cache/graphs");
-        FileStorage fileStore;
-        if (workOffline) {
-            fileStore = new LocalFileStorage(graphDirectory);
-        } else {
-            fileStore = new S3FileStorage(config.getProperty("aws-region"), graphDirectory);
-        }
-
-        // TODO worker config classes structured like BackendConfig
-        String graphsBucket = workOffline ? null : config.getProperty("graphs-bucket");
-        OSMCache osmCache = new OSMCache(fileStore, () -> graphsBucket);
-        GTFSCache gtfsCache = new GTFSCache(fileStore, () -> graphsBucket);
-
-        TransportNetworkCache cache = new TransportNetworkCache(fileStore, gtfsCache, osmCache, graphsBucket);
-        return new AnalysisWorker(config, fileStore, cache);
-    }
-
     // TODO merge this constructor with the forConfig factory method, so we don't have different logic for local and cluster workers
-    public AnalysisWorker (Properties config, FileStorage fileStore, TransportNetworkCache transportNetworkCache) {
+    public AnalysisWorker (Properties config, PointSetCache pointSetCache, TransportNetworkCache transportNetworkCache, BiConsumer<String, File> moveIntoTauiStorage) {
         // print out date on startup so that CloudWatch logs has a unique fingerprint
         LOG.info("Analyst worker {} starting at {}", machineId,
                 LocalDateTime.now().format(DateTimeFormatter.ISO_DATE_TIME));
 
+        this.moveIntoTauiStorage = moveIntoTauiStorage;
+
         // PARSE THE CONFIGURATION TODO move configuration parsing into a separate method.
-
         testTaskRedelivery = Boolean.parseBoolean(config.getProperty("test-task-redelivery", "false"));
-
-        // Region region = Region.getRegion(Regions.fromName(config.getProperty("aws-region")));
-        // TODO Eliminate this default base-bucket value "analysis-staging" and set it properly when the backend starts workers.
-        //      It's currently harmless to hard-wire it because it only affects polygon downloads for experimental modifications.
-        filePersistence = new S3FilePersistence(config.getProperty("aws-region"), config.getProperty("base-bucket", "analysis-staging"));
 
         // First, check whether we are running Analyst offline.
         workOffline = Boolean.parseBoolean(config.getProperty("work-offline", "false"));
@@ -275,7 +257,7 @@ public class AnalysisWorker implements Runnable {
         // graph this machine was intended to analyze.
         this.networkId = config.getProperty("initial-graph-id");
 
-        this.pointSetCache = new PointSetCache(fileStore, config.getProperty("pointsets-bucket"));
+        this.pointSetCache = pointSetCache;
         this.networkPreloader = new NetworkPreloader(transportNetworkCache);
         this.autoShutdown = Boolean.parseBoolean(config.getProperty("auto-shutdown", "false"));
         this.listenForSinglePointRequests = Boolean.parseBoolean(config.getProperty("listen-for-single-point", "true"));
@@ -328,7 +310,6 @@ public class AnalysisWorker implements Runnable {
      */
     @Override
     public void run() {
-
         // Create executors with up to one thread per processor.
         // The default task rejection policy is "Abort".
         // The executor's queue is rather long because some tasks complete very fast and we poll max once per second.
@@ -450,7 +431,7 @@ public class AnalysisWorker implements Runnable {
         adjustShutdownClock(SINGLE_KEEPALIVE_MINUTES);
 
         // Perform the core travel time computations.
-        TravelTimeComputer computer = new TravelTimeComputer(task, transportNetwork);
+        TravelTimeComputer computer = new TravelTimeComputer(task, transportNetwork, moveIntoTauiStorage);
         OneOriginResult oneOriginResult = computer.computeTravelTimes();
         return oneOriginResult;
     }
@@ -499,7 +480,6 @@ public class AnalysisWorker implements Runnable {
      * worker polls the backend.
      */
     protected void handleOneRegionalTask(RegionalTask task) {
-
         LOG.info("Handling regional task {}", task.toString());
 
         // If this worker is being used in a test of the task redelivery mechanism. Report most work as completed
@@ -567,7 +547,7 @@ public class AnalysisWorker implements Runnable {
             adjustShutdownClock(REGIONAL_KEEPALIVE_MINUTES);
 
             // Perform the core travel time and accessibility computations.
-            TravelTimeComputer computer = new TravelTimeComputer(task, transportNetwork);
+            TravelTimeComputer computer = new TravelTimeComputer(task, transportNetwork, moveIntoTauiStorage);
             OneOriginResult oneOriginResult = computer.computeTravelTimes();
 
             if (task.makeTauiSite) {
@@ -579,7 +559,7 @@ public class AnalysisWorker implements Runnable {
                     TimeGridWriter timeGridWriter = new TimeGridWriter(oneOriginResult.travelTimes, task);
                     PersistenceBuffer persistenceBuffer = timeGridWriter.writeToPersistenceBuffer();
                     String timesFileName = task.taskId + "_times.dat";
-                    filePersistence.saveStaticSiteData(task, timesFileName, persistenceBuffer);
+                    saveStaticSiteData(task, timesFileName, persistenceBuffer);
                 } else {
                     LOG.info("No destination cells reached. Not saving static site file to reduce storage space.");
                 }
@@ -751,25 +731,29 @@ public class AnalysisWorker implements Runnable {
     /**
      * Generate and write out metadata describing what's in a directory of static site output.
      */
-    public static void saveStaticSiteMetadata (AnalysisWorkerTask analysisWorkerTask, TransportNetwork network) {
+    public void saveStaticSiteMetadata (AnalysisWorkerTask analysisWorkerTask, TransportNetwork network) {
         try {
             // Save the regional analysis request, giving the UI some context to display the results.
             // This is the request object sent to the workers to generate these static site regional results.
             PersistenceBuffer buffer = PersistenceBuffer.serializeAsJson(analysisWorkerTask);
-            AnalysisWorker.filePersistence.saveStaticSiteData(analysisWorkerTask, "request.json", buffer);
+            saveStaticSiteData(analysisWorkerTask, "request.json", buffer);
 
             // Save non-fatal warnings encountered applying the scenario to the network for this regional analysis.
             buffer = PersistenceBuffer.serializeAsJson(network.scenarioApplicationWarnings);
-            AnalysisWorker.filePersistence.saveStaticSiteData(analysisWorkerTask, "warnings.json", buffer);
+            saveStaticSiteData(analysisWorkerTask, "warnings.json", buffer);
 
             // Save transit route data that allows rendering paths with the Transitive library in a separate file.
             TransitiveNetwork transitiveNetwork = new TransitiveNetwork(network.transitLayer);
             buffer = PersistenceBuffer.serializeAsJson(transitiveNetwork);
-            AnalysisWorker.filePersistence.saveStaticSiteData(analysisWorkerTask, "transitive.json", buffer);
+            saveStaticSiteData(analysisWorkerTask, "transitive.json", buffer);
         } catch (Exception e) {
             LOG.error("Exception saving static metadata: {}", ExceptionUtils.asString(e));
             throw new RuntimeException(e);
         }
+    }
+
+    private void saveStaticSiteData (AnalysisWorkerTask task, String key, PersistenceBuffer buffer) {
+        moveIntoTauiStorage.accept(task.taskId + "/" + key, FileUtils.createScratchFile(buffer.getInputStream()));
     }
 
     /**
@@ -798,7 +782,26 @@ public class AnalysisWorker implements Runnable {
             return;
         }
         try {
-            AnalysisWorker.forConfig(config).run();
+            boolean workOffline = Boolean.parseBoolean(config.getProperty("work-offline", "false"));
+            String cacheDirectory = config.getProperty("cache-dir", "cache/graphs");
+            FileStorage fileStore = workOffline
+                    ? new LocalFileStorage(cacheDirectory)
+                    : new S3FileStorage(config.getProperty("aws-region"), cacheDirectory);
+
+            // TODO worker config classes structured like BackendConfig
+
+            Bucket graphsBucket = new Bucket(config.getProperty("bundle-bucket"), fileStore);
+            Bucket tauiResultsBucket = new Bucket(config.getProperty("taui-results-bucket"), fileStore);
+            OSMCache osmCache = new OSMCache(graphsBucket.createGetFile());
+            GTFSCache gtfsCache = new GTFSCache(graphsBucket);
+            PointSetCache pointSetCache = new PointSetCache(fileStore.createGetFile(config.getProperty("pointsets-bucket")));
+            TransportNetworkCache cache = new TransportNetworkCache(graphsBucket, gtfsCache, osmCache);
+
+            // Static is necessary at the moment because of how far away the method is used.
+            Bucket polygonsBucket = new Bucket(config.getProperty("polygons-bucket"), fileStore);
+            AnalysisWorker.getPolygonFile = polygonsBucket.createGetFile();
+
+            new AnalysisWorker(config, pointSetCache, cache, tauiResultsBucket.createMoveIntoStorage()).run();
         } catch (Exception e) {
             LOG.error("Unhandled error in analyst worker, shutting down. " + ExceptionUtils.asString(e));
         }

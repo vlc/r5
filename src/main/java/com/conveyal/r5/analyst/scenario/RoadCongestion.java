@@ -1,5 +1,6 @@
 package com.conveyal.r5.analyst.scenario;
 
+import com.conveyal.file.FileUtils;
 import com.conveyal.r5.analyst.FileCategory;
 import com.conveyal.r5.analyst.cluster.AnalysisWorker;
 import com.conveyal.r5.streets.EdgeStore;
@@ -109,7 +110,7 @@ public class RoadCongestion extends Modification {
         // this.features = polygonLayerCache.getPolygonFeatureCollection(this.polygonLayer);
         // Note: Newer JTS now has GeoJsonReader
         try {
-            InputStream s3InputStream = AnalysisWorker.filePersistence.getData(FileCategory.POLYGON, polygonLayer);
+            InputStream s3InputStream = FileUtils.getInputStream(AnalysisWorker.getPolygonFile.apply(polygonLayer));
             // To test on local files:
             //InputStream s3InputStream = new FileInputStream("/Users/abyrd/" + polygonLayer);
             // TODO handle gzip decompression in FilePersistence base class.

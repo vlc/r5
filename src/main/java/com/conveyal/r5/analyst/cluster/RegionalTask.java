@@ -1,5 +1,7 @@
 package com.conveyal.r5.analyst.cluster;
 
+import com.conveyal.r5.analyst.Grid;
+import com.conveyal.r5.analyst.PointSet;
 import com.conveyal.r5.analyst.WebMercatorExtents;
 
 /**
@@ -31,6 +33,14 @@ public class RegionalTask extends AnalysisWorkerTask implements Cloneable {
     public String originPointSetKey;
 
     /**
+     * If non-null, this specifies the non-gridded (freeform) origin points of this regional
+     * analysis. If null, the origin points are specified implicitly by web mercator dimensions of
+     * the template task. Ideally we'd always have a PointSet here and use polymorphism to get the
+     * lat and lon coordinates of each point, whether it's a grid or freeform.
+     */
+    public PointSet originPointSet;
+
+    /**
      * Whether to calculate travel time from each origin to one corresponding destination (the destination at the
      * same position in the destionationPointSet). If false, travel time calculations will be many-to-many (between
      * all origin points and all destination points).
@@ -46,6 +56,11 @@ public class RegionalTask extends AnalysisWorkerTask implements Cloneable {
      * Whether to record cumulative opportunity accessibility indicators for each origin
      */
     public boolean recordAccessibility;
+
+    /**
+     * Total tasks in this set.
+     */
+    public int nTasksTotal;
 
     @Override
     public Type getType() {
@@ -74,6 +89,35 @@ public class RegionalTask extends AnalysisWorkerTask implements Cloneable {
 
     public RegionalTask clone () {
         return (RegionalTask) super.clone();
+    }
+
+    /**
+     * The only thing that changes from one task to the next is the origin coordinates. If this task
+     * does not include an originPointSet, derive these coordinates from the web mercator grid
+     * specified by the task. If this task does include an originPointSet, look up the
+     * coordinates from that pointset.
+     * <p>
+     * TODO make the workers calculate the coordinates, sending them a range of task numbers.
+     *
+     * @param taskNumber the task number within the job, equal to the point number within the origin
+     *                   point set.
+     */
+    public RegionalTask makeOneTask (int taskNumber) {
+        RegionalTask task = this.clone();
+        task.taskId = taskNumber;
+        if (task.originPointSet == null) {
+            // Origins specified implicitly by web mercator dimensions of task
+            int x = taskNumber % this.width;
+            int y = taskNumber / this.width;
+            task.fromLat = Grid.pixelToCenterLat(task.north + y, task.zoom);
+            task.fromLon = Grid.pixelToCenterLon(task.west + x, task.zoom);
+        } else {
+            // Look up coordinates and originId from job's originPointSet
+            task.originId = task.originPointSet.getId(taskNumber);
+            task.fromLat = task.originPointSet.getLat(taskNumber);
+            task.fromLon = task.originPointSet.getLon(taskNumber);
+        }
+        return task;
     }
 
     @Override

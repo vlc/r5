@@ -1,5 +1,7 @@
 package com.conveyal.r5.analyst.network;
 
+import com.conveyal.file.FileStorage;
+import com.conveyal.file.LocalFileStorage;
 import com.conveyal.r5.OneOriginResult;
 import com.conveyal.r5.analyst.TravelTimeComputer;
 import com.conveyal.r5.analyst.WebMercatorGridPointSet;
@@ -25,6 +27,7 @@ import java.io.FileOutputStream;
 public class SimpsonDesertTests {
 
     public static final Coordinate SIMPSON_DESERT_CORNER = new CoordinateXY(136.5, -25.5);
+    public static final FileStorage fileStorage = new LocalFileStorage("testing-cache");
 
     @Test
     public void testGridScheduled () throws Exception {
@@ -34,6 +37,7 @@ public class SimpsonDesertTests {
         gridLayout.addHorizontalRoute(60, 20);
         gridLayout.addVerticalRoute(40, 20);
         TransportNetwork network = gridLayout.generateNetwork();
+
 
         // Logging and file export for debugging:
         // System.out.println("Grid envelope: " + gridLayout.gridEnvelope());
@@ -45,7 +49,7 @@ public class SimpsonDesertTests {
                 .uniformOpportunityDensity(10)
                 .build();
 
-        TravelTimeComputer computer = new TravelTimeComputer(task, network);
+        TravelTimeComputer computer = new TravelTimeComputer(task, network, fileStorage.createMoveIntoStorage("taui-results"));
         OneOriginResult oneOriginResult = computer.computeTravelTimes();
 
         // Write travel times to Geotiff for debugging visualization in desktop GIS:
@@ -92,7 +96,7 @@ public class SimpsonDesertTests {
                 .uniformOpportunityDensity(10)
                 .build();
 
-        TravelTimeComputer computer = new TravelTimeComputer(task, network);
+        TravelTimeComputer computer = new TravelTimeComputer(task, network, fileStorage.createMoveIntoStorage("taui-results"));
         OneOriginResult oneOriginResult = computer.computeTravelTimes();
 
         // This should be factored out into a method eventually
@@ -131,7 +135,7 @@ public class SimpsonDesertTests {
                 .monteCarloDraws(20000)
                 .build();
 
-        TravelTimeComputer computer = new TravelTimeComputer(task, network);
+        TravelTimeComputer computer = new TravelTimeComputer(task, network, fileStorage.createMoveIntoStorage("taui-results"));
         OneOriginResult oneOriginResult = computer.computeTravelTimes();
 
         // This should be factored out into a method eventually
@@ -175,7 +179,7 @@ public class SimpsonDesertTests {
                 .monteCarloDraws(4000)
                 .build();
 
-        TravelTimeComputer computer = new TravelTimeComputer(task, network);
+        TravelTimeComputer computer = new TravelTimeComputer(task, network, fileStorage.createMoveIntoStorage("taui-results"));
         OneOriginResult oneOriginResult = computer.computeTravelTimes();
 
         // This should be factored out into a method eventually

@@ -1,8 +1,10 @@
 package com.conveyal.analysis.components;
 
 import com.conveyal.analysis.components.broker.WorkerTags;
+import com.conveyal.file.Bucket;
 import com.conveyal.file.FileStorage;
 import com.conveyal.gtfs.GTFSCache;
+import com.conveyal.r5.analyst.PointSetCache;
 import com.conveyal.r5.analyst.WorkerCategory;
 import com.conveyal.r5.analyst.cluster.AnalysisWorker;
 import com.conveyal.r5.streets.OSMCache;
@@ -10,15 +12,16 @@ import com.conveyal.r5.transit.TransportNetworkCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
+import java.util.function.BiConsumer;
 
 /**
  * Start workers as threads on the local machine.
  */
 public class LocalWorkerLauncher implements WorkerLauncher {
-
     private static final Logger LOG = LoggerFactory.getLogger(LocalWorkerLauncher.class);
     private static final int N_WORKERS_LOCAL = 1;
     private static final int N_WORKERS_LOCAL_TESTING = 4;
@@ -31,22 +34,18 @@ public class LocalWorkerLauncher implements WorkerLauncher {
         boolean testTaskRedelivery();
     }
 
-    private final TransportNetworkCache transportNetworkCache;
-    private final FileStorage fileStorage;
-
     private final Properties workerConfig = new Properties();
     private final int nWorkers;
     private final List<Thread> workerThreads = new ArrayList<>();
+    private final PointSetCache pointSetCache;
+    private final TransportNetworkCache transportNetworkCache;
+    private final BiConsumer<String, File> moveIntoTauiStorage;
 
-    public LocalWorkerLauncher (Config config, FileStorage fileStorage, GTFSCache gtfsCache, OSMCache osmCache) {
+    public LocalWorkerLauncher (Config config, PointSetCache pointSetCache, TransportNetworkCache transportNetworkCache, BiConsumer<String, File> moveIntoTauiStorage) {
+        this.pointSetCache = pointSetCache;
+        this.transportNetworkCache = transportNetworkCache;
+        this.moveIntoTauiStorage = moveIntoTauiStorage;
         LOG.info("Running in OFFLINE mode, a maximum of {} worker threads will be started locally.", N_WORKERS_LOCAL);
-        this.fileStorage = fileStorage;
-        transportNetworkCache = new TransportNetworkCache(
-                fileStorage,
-                gtfsCache,
-                osmCache,
-                config.bundleBucket()
-        );
         // Create configuration for the locally running worker
         workerConfig.setProperty("work-offline", "true");
         // Do not auto-shutdown the local machine
@@ -54,6 +53,7 @@ public class LocalWorkerLauncher implements WorkerLauncher {
         workerConfig.setProperty("broker-address", "localhost");
         workerConfig.setProperty("broker-port", Integer.toString(config.serverPort()));
         workerConfig.setProperty("cache-dir", config.localCacheDirectory());
+        workerConfig.setProperty("bundle-bucket", config.bundleBucket());
         workerConfig.setProperty("pointsets-bucket", config.gridBucket());
         workerConfig.setProperty("aws-region", "eu-west-1"); // TODO remove? Should not be necessary with local worker.
 
@@ -90,7 +90,8 @@ public class LocalWorkerLauncher implements WorkerLauncher {
             if (i > 0) {
                 singleWorkerConfig.setProperty("listen-for-single-point", "false");
             }
-            AnalysisWorker worker = new AnalysisWorker(singleWorkerConfig, fileStorage, transportNetworkCache);
+
+            AnalysisWorker worker = new AnalysisWorker(singleWorkerConfig, pointSetCache, transportNetworkCache, moveIntoTauiStorage);
             Thread workerThread = new Thread(worker, "WORKER " + i);
             workerThreads.add(workerThread);
             workerThread.start();

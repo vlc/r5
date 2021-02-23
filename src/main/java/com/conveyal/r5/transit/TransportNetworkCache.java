@@ -1,6 +1,7 @@
 package com.conveyal.r5.transit;
 
 import com.conveyal.analysis.BackendVersion;
+import com.conveyal.file.Bucket;
 import com.conveyal.file.FileStorage;
 import com.conveyal.file.FileStorageKey;
 import com.conveyal.file.FileUtils;
@@ -49,10 +50,9 @@ public class TransportNetworkCache {
     // TODO change all other caches from Guava to Caffeine caches. This one is already a Caffeine cache.
     private final LoadingCache<String, TransportNetwork> cache;
 
-    private final FileStorage fileStorage;
     private final GTFSCache gtfsCache;
     private final OSMCache osmCache;
-    private final String bucket;
+    private final Bucket bucket;
 
     /**
      * A table of already seen scenarios, avoiding downloading them repeatedly from S3 and allowing us to replace
@@ -61,12 +61,11 @@ public class TransportNetworkCache {
     private final ScenarioCache scenarioCache = new ScenarioCache();
 
     /** Create a transport network cache. If source bucket is null, will work offline. */
-    public TransportNetworkCache(FileStorage fileStorage, GTFSCache gtfsCache, OSMCache osmCache, String bucket) {
+    public TransportNetworkCache(Bucket bucket, GTFSCache gtfsCache, OSMCache osmCache) {
         this.osmCache = osmCache;
         this.gtfsCache = gtfsCache;
         this.bucket = bucket;
         this.cache = createCache(DEFAULT_CACHE_SIZE);
-        this.fileStorage = fileStorage;
     }
 
     /** Convenience method that returns transport network from cache. */
@@ -142,9 +141,9 @@ public class TransportNetworkCache {
 
     /** If this transport network is already built and cached, fetch it quick */
     private TransportNetwork checkCached (String networkId) {
-        FileStorageKey r5Key = getR5NetworkFileStorageKey(networkId);
-        if (fileStorage.exists(r5Key)) {
-            File r5Network = fileStorage.getFile(r5Key);
+        String r5Key = getR5NetworkFileStorageKey(networkId);
+        if (bucket.exists(r5Key)) {
+            File r5Network = bucket.getFile(r5Key);
             LOG.info("Loading cached transport network at {}", r5Network);
             try {
                 return KryoNetworkSerializer.read(r5Network);
@@ -161,8 +160,8 @@ public class TransportNetworkCache {
         return networkId + "_" + BackendVersion.instance.version + ".dat";
     }
 
-    private FileStorageKey getR5NetworkFileStorageKey (String networkId) {
-        return new FileStorageKey(bucket, getR5NetworkFilename(networkId));
+    private String getR5NetworkFileStorageKey (String networkId) {
+        return getR5NetworkFilename(networkId);
     }
 
     /** If we did not find a cached network, build one */
@@ -170,8 +169,8 @@ public class TransportNetworkCache {
         TransportNetwork network;
 
         // check if we have a new-format bundle with a JSON manifest
-        FileStorageKey manifestFileKey = new FileStorageKey(bucket,GTFSCache.cleanId(networkId) + ".json");
-        if (fileStorage.exists(manifestFileKey)) {
+        String manifestFileKey = GTFSCache.cleanId(networkId) + ".json";
+        if (bucket.exists(manifestFileKey)) {
             LOG.info("Detected new-format bundle with manifest.");
             network = buildNetworkFromManifest(networkId);
         } else {
@@ -196,7 +195,7 @@ public class TransportNetworkCache {
             // Serialize TransportNetwork to local cache on this worker
             KryoNetworkSerializer.write(network, cacheLocation);
             // Store locally (and on S3)
-            fileStorage.moveIntoStorage(getR5NetworkFileStorageKey(networkId), cacheLocation);
+            bucket.moveIntoStorage(getR5NetworkFileStorageKey(networkId), cacheLocation);
         } catch (Exception e) {
             // Don't break here as we do have a network to return, we just couldn't cache it.
             LOG.error("Error saving cached network", e);
@@ -208,8 +207,8 @@ public class TransportNetworkCache {
     private TransportNetwork buildNetworkFromBundleZip (String networkId) {
         // The location of the inputs that will be used to build this graph
         File dataDirectory = FileUtils.createScratchDirectory();
-        FileStorageKey zipKey = new FileStorageKey(bucket,networkId + ".zip");
-        File zipFile = fileStorage.getFile(zipKey);
+        String zipKey = networkId + ".zip";
+        File zipFile = bucket.getFile(zipKey);
 
         try {
             ZipInputStream zis = new ZipInputStream(new FileInputStream(zipFile));
@@ -254,8 +253,8 @@ public class TransportNetworkCache {
      * It contains the unique IDs of the GTFS feeds and OSM extract.
      */
     private TransportNetwork buildNetworkFromManifest (String networkId) {
-        FileStorageKey manifestFileKey = new FileStorageKey(bucket, getManifestFilename(networkId));
-        File manifestFile = fileStorage.getFile(manifestFileKey);
+        String manifestFileKey = getManifestFilename(networkId);
+        File manifestFile = bucket.getFile(manifestFileKey);
         BundleManifest manifest;
 
         try {
@@ -359,9 +358,9 @@ public class TransportNetworkCache {
         // If a scenario ID is supplied, it overrides any supplied full scenario.
         // There is no intermediate cache here for the scenario objects - we read them from disk files.
         // This is not a problem, they're only read once before cacheing the resulting scenario-network.
-        FileStorageKey scenarioFileKey = new FileStorageKey(bucket, getScenarioFilename(networkId, scenarioId));
+        String scenarioFileKey = getScenarioFilename(networkId, scenarioId);
         try {
-            File scenarioFile = fileStorage.getFile(scenarioFileKey);
+            File scenarioFile = bucket.getFile(scenarioFileKey);
             LOG.info("Loading scenario from disk file {}", scenarioFile);
             return JsonUtilities.lenientObjectMapper.readValue(scenarioFile, Scenario.class);
         } catch (Exception e) {
@@ -369,5 +368,4 @@ public class TransportNetworkCache {
             throw new RuntimeException("Scenario could not be loaded.", e);
         }
     }
-
 }

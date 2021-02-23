@@ -57,7 +57,6 @@ public abstract class BackendMain {
         Persistence.initializeStatically(components.config);
         SeamlessCensusGridExtractor.configureStatically(components.config);
         ApiMain.initialize(components.gtfsCache);
-        PointSetCache.initializeStatically(components.fileStorage, components.config.gridBucket());
 
         if (components.config.offline()) {
             LOG.info("Running in OFFLINE mode.");

@@ -1,9 +1,12 @@
 package com.conveyal.analysis.results;
 
-import com.conveyal.file.FileStorage;
+import com.conveyal.file.FileUtils;
 import com.conveyal.r5.analyst.LittleEndianIntOutputStream;
 import com.conveyal.r5.analyst.cluster.RegionalTask;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -35,9 +38,10 @@ import static com.conveyal.r5.common.Util.human;
  * <li>(repeated 4-byte int) values of each pixel in row-major order: axis order (row, column, channel).</li>
  * </ol>
  */
-public class GridResultWriter extends ResultWriter {
-
-    private RandomAccessFile randomAccessFile;
+public class GridResultWriter {
+    public static final Logger LOG = LoggerFactory.getLogger(GridResultWriter.class);
+    public final File bufferFile = FileUtils.createScratchFile();
+    private final RandomAccessFile randomAccessFile = new RandomAccessFile(bufferFile, "rw");
 
     /** The version of the access grids we produce */
     private static final int ACCESS_GRID_VERSION = 0;
@@ -52,8 +56,7 @@ public class GridResultWriter extends ResultWriter {
      * Conveyal grid format. This also creates the on-disk scratch buffer into which the results
      * from the workers will be accumulated.
      */
-    GridResultWriter (RegionalTask task, String outputBucket, FileStorage fileStorage) throws IOException {
-        super(fileStorage);
+    GridResultWriter (RegionalTask task) throws IOException {
         int width = task.width;
         int height = task.height;
         this.channels = task.cutoffsMinutes.length;
@@ -63,7 +66,6 @@ public class GridResultWriter extends ResultWriter {
             height,
             channels
         );
-        super.prepare(task.jobId, outputBucket);
 
         // Write the access grid file header to the temporary file.
         FileOutputStream fos = new FileOutputStream(bufferFile);
@@ -87,19 +89,11 @@ public class GridResultWriter extends ResultWriter {
         // IO limits on cloud servers with network storage. Even without initialization, any complete regional analysis
         // would overwrite every byte in the file with a result for some origin point, so the initial values are only
         // important when visualizing or debugging partially completed analysis results.
-        this.randomAccessFile = new RandomAccessFile(bufferFile, "rw");
         randomAccessFile.setLength(HEADER_LENGTH_BYTES + (width * height * channels * Integer.BYTES));
         LOG.info(
             "Created temporary file to accumulate results from workers, size is {}.",
             human(randomAccessFile.length(), "B")
         );
-    }
-
-    /** Gzip the access grid and upload it to S3. */
-    @Override
-    protected synchronized void finish (String fileName) throws IOException {
-        super.finish(fileName);
-        randomAccessFile.close();
     }
 
     /**
@@ -137,10 +131,8 @@ public class GridResultWriter extends ResultWriter {
         }
     }
 
-    @Override
     synchronized void terminate () throws IOException {
-        bufferFile.delete();
         randomAccessFile.close();
+        bufferFile.delete();
     }
-
 }

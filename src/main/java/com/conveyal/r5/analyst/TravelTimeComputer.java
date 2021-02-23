@@ -24,7 +24,9 @@ import gnu.trove.map.TIntIntMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.util.EnumSet;
+import java.util.function.BiConsumer;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
@@ -47,10 +49,12 @@ public class TravelTimeComputer {
     private static final Logger LOG = LoggerFactory.getLogger(TravelTimeComputer.class);
     private final AnalysisWorkerTask request;
     private final TransportNetwork network;
+    private final BiConsumer<String, File> moveIntoTauiStorage;
 
     /** Constructor. */
-    public TravelTimeComputer (AnalysisWorkerTask request, TransportNetwork network) {
+    public TravelTimeComputer (AnalysisWorkerTask request, TransportNetwork network, BiConsumer<String, File> moveIntoTauiStorage) {
         this.request = request;
+        this.moveIntoTauiStorage = moveIntoTauiStorage;
         this.network = network;
     }
 
@@ -341,7 +345,7 @@ public class TravelTimeComputer {
             // Initialize the propagater's pathWriter to write Taui results directly to storage (instead of returning
             // them to the backend).
             if (request.makeTauiSite) {
-                perTargetPropagater.pathWriter = new PathWriter(request);
+                perTargetPropagater.pathWriter = new PathWriter(request, moveIntoTauiStorage);
             }
         }
 

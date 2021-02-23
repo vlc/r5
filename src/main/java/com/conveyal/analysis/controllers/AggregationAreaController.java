@@ -4,6 +4,7 @@ import com.conveyal.analysis.AnalysisServerException;
 import com.conveyal.analysis.models.AggregationArea;
 import com.conveyal.analysis.persistence.Persistence;
 import com.conveyal.analysis.util.HttpUtils;
+import com.conveyal.file.Bucket;
 import com.conveyal.file.FileStorage;
 import com.conveyal.file.FileStorageKey;
 import com.conveyal.file.FileUtils;
@@ -51,23 +52,15 @@ public class AggregationAreaController implements HttpController {
      */
     private static int MAX_FEATURES = 100;
 
-    private final FileStorage fileStorage;
-    private final Config config;
+    private final Bucket gridBucket;
 
     public interface Config {
         // TODO this could be eliminated by hard-wiring file types to bucket subdirectories in the FileStorage.
         String gridBucket ();
     }
 
-    public AggregationAreaController (FileStorage fileStorage, Config config) {
-        this.fileStorage = fileStorage;
-        this.config = config;
-    }
-
-
-
-    private FileStorageKey getStoragePath (AggregationArea area) {
-        return new FileStorageKey(config.gridBucket(), area.getS3Key());
+    public AggregationAreaController (Bucket gridBucket) {
+        this.gridBucket = gridBucket;
     }
 
     /**
@@ -175,8 +168,7 @@ public class AggregationAreaController implements HttpController {
                 // Create the aggregation area before generating the S3 key so that the `_id` is generated
                 Persistence.aggregationAreas.create(aggregationArea);
                 aggregationAreas.add(aggregationArea);
-
-                fileStorage.moveIntoStorage(getStoragePath(aggregationArea), gridFile);
+                gridBucket.moveIntoStorage(aggregationArea.getS3Key(), gridFile);
             } catch (IOException e) {
                 throw new AnalysisServerException("Error processing/uploading aggregation area");
             }
@@ -210,7 +202,7 @@ public class AggregationAreaController implements HttpController {
 
         AggregationArea aggregationArea = Persistence.aggregationAreas.findByIdIfPermitted(maskId, accessGroup);
 
-        String url = fileStorage.getURL(getStoragePath(aggregationArea));
+        String url = gridBucket.getURL(aggregationArea.getS3Key());
         JSONObject wrappedUrl = new JSONObject();
         wrappedUrl.put("url", url);
 

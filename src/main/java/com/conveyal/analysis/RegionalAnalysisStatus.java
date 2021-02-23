@@ -1,6 +1,5 @@
 package com.conveyal.analysis;
 
-
 import com.conveyal.analysis.results.MultiOriginAssembler;
 
 import java.io.Serializable;
