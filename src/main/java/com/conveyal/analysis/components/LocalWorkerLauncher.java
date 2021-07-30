@@ -47,6 +47,7 @@ public class LocalWorkerLauncher implements WorkerLauncher {
         workerConfig.setProperty("broker-address", "localhost");
         workerConfig.setProperty("broker-port", Integer.toString(config.serverPort()));
         workerConfig.setProperty("cache-dir", config.localCacheDirectory());
+        workerConfig.setProperty("api-external-url", config.externalApiUrl());
         workerConfig.setProperty("test-task-redelivery", "false");
 
 

@@ -16,6 +16,7 @@ public class LocalWorkerConfig extends WorkerConfig implements LocalFileStorage.
         super(props);
         // Actually this is not used directly, backend storage component is passed in to local worker constructor.
         cacheDirectory = strProp("cache-dir");
+        externalApiUrl = strProp("api-external-url");
         exitIfErrors();
     }
 
@@ -27,6 +28,7 @@ public class LocalWorkerConfig extends WorkerConfig implements LocalFileStorage.
     @Override public int     serverPort() { return -1; }
     @Override public String  localCacheDirectory () { return cacheDirectory; }
     @Override public String  initialGraphId () { return null; } //
+    @Override public String  apiExternalUrl () { return externalApiUrl; }
 
     // STATIC FACTORY METHODS
     // Use these to construct WorkerConfig objects for readability.
