@@ -29,7 +29,7 @@ public class LocalWorkerConfig extends WorkerConfig implements LocalFileStorage.
     @Override public int     serverPort() { return -1; }
     @Override public String  localCacheDirectory () { return cacheDirectory; }
     @Override public String  initialGraphId () { return null; } //
-    @Override public String  apiExternalUrl () { return externalApiUrl; }
+    @Override public String  externalApiUrl () { return externalApiUrl; }
 
     // STATIC FACTORY METHODS
     // Use these to construct WorkerConfig objects for readability.
