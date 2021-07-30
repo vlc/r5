@@ -28,6 +28,7 @@ public class LocalWorkerLauncher implements WorkerLauncher {
     public interface Config {
         int serverPort ();
         String localCacheDirectory ();
+        String externalApiUrl ();
         boolean testTaskRedelivery();
     }
 
