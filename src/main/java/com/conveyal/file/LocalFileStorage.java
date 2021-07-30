@@ -23,6 +23,8 @@ public class LocalFileStorage implements FileStorage {
         String localCacheDirectory ();
         // The port where the browser can fetch files. Parameter name aligned with the HttpApi server port parameter.
         int serverPort ();
+        // External API URL for creating correct absolute paths
+        String externalApiUrl ();
     }
 
     public final String directory;
@@ -30,7 +32,7 @@ public class LocalFileStorage implements FileStorage {
 
     public LocalFileStorage (Config config) {
         this.directory = config.localCacheDirectory();
-        this.urlPrefix = String.format("http://localhost:%s/files", config.serverPort());
+        this.urlPrefix = String.format("%s/files", config.externalApiUrl());
         new File(directory).mkdirs();
     }
 

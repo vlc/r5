@@ -41,6 +41,7 @@ public class BackendConfig extends ConfigBase implements
     private final int lightThreads;
     private final int heavyThreads;
     private final int maxWorkers;
+    private final String externalApiUrl;
     // If set to true, the backend will start up and immediately exit with a success code.
     // This is used for testing that automated builds and JAR packaging are producing a usable artifact.
     public final boolean immediateShutdown;
@@ -68,6 +69,7 @@ public class BackendConfig extends ConfigBase implements
         lightThreads = intProp("light-threads");
         heavyThreads = intProp("heavy-threads");
         maxWorkers = intProp("max-workers");
+        externalApiUrl = strProp("api-external-url");
         exitIfErrors();
     }
 
@@ -86,6 +88,7 @@ public class BackendConfig extends ConfigBase implements
     @Override public int     serverPort()           { return serverPort; }
     @Override public boolean offline()              { return offline; }
     @Override public int     maxWorkers()           { return maxWorkers; }
+    @Override public String  externalApiUrl()       { return externalApiUrl; }
 
     // STATIC FACTORY METHODS
     // Always use these to construct BackendConfig objects for readability.
