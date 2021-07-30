@@ -11,6 +11,7 @@ import java.util.Properties;
 public class LocalWorkerConfig extends WorkerConfig implements LocalFileStorage.Config {
 
     private final String  cacheDirectory;
+    private final String  externalApiUrl;
 
     private LocalWorkerConfig (Properties props) {
         super(props);
